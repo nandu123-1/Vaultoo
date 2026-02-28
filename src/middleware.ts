@@ -16,17 +16,41 @@ const publicPaths = [
   "/api/v1/webhook",
   "/api/v1/session-status",
   "/api/v1/end-session",
+  "/api/v1/screen-share",
+  "/api/v1/request-extension",
 ];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths
-  if (publicPaths.some((path) => pathname.startsWith(path))) {
-    return NextResponse.next();
+  const corsHeaders: Record<string, string> = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, X-Session-Token",
+  };
+
+  // Handle OPTIONS (CORS preflight) FIRST — before any auth checks
+  if (request.method === "OPTIONS") {
+    return new NextResponse(null, { status: 200, headers: corsHeaders });
   }
 
-  // Allow static assets & api preflight
+  // Helper: attach CORS headers to any API response
+  const withCors = (response: NextResponse) => {
+    if (pathname.startsWith("/api/")) {
+      Object.entries(corsHeaders).forEach(([k, v]) =>
+        response.headers.set(k, v),
+      );
+    }
+    return response;
+  };
+
+  // Allow public paths
+  if (publicPaths.some((path) => pathname.startsWith(path))) {
+    return withCors(NextResponse.next());
+  }
+
+  // Allow static assets
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
@@ -35,47 +59,27 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Handle OPTIONS (CORS preflight)
-  if (request.method === "OPTIONS") {
-    return new NextResponse(null, {
-      status: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers":
-          "Content-Type, Authorization, X-Session-Token",
-      },
-    });
-  }
-
   // Check for auth token
   const token = request.cookies.get("vaultoo-token")?.value;
 
   if (!token) {
-    // API routes return 401
+    // API routes return 401 (with CORS so browser can read the error)
     if (pathname.startsWith("/api/")) {
-      return NextResponse.json(
-        { success: false, message: "Unauthorized" },
-        { status: 401 },
+      return new NextResponse(
+        JSON.stringify({ success: false, message: "Unauthorized" }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        },
       );
     }
     // Page routes redirect to login
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  // Add CORS headers to all API responses
+  // Add CORS headers to all authenticated API responses
   if (pathname.startsWith("/api/")) {
-    const response = NextResponse.next();
-    response.headers.set("Access-Control-Allow-Origin", "*");
-    response.headers.set(
-      "Access-Control-Allow-Methods",
-      "GET, POST, PUT, DELETE, OPTIONS",
-    );
-    response.headers.set(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Session-Token",
-    );
-    return response;
+    return withCors(NextResponse.next());
   }
 
   // Redirect root to dashboard
